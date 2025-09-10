@@ -30,6 +30,9 @@ from textwrap import indent
 import requests
 import argparse
 import logging
+from openai import OpenAI
+import time
+import re
 
 # --- CONFIGURATION ---
 # The model to use. "gemini-1.5-flash" is fast and capable.
@@ -490,132 +493,117 @@ def init_explorations(problem_statement, verbose=True, other_prompts=[]):
     
     return p1, solution, verify, good_verify
 
-def agent(problem_statement, other_prompts=[], memory_file=None, resume_from_memory=False):
-    if resume_from_memory and memory_file:
-        # Load memory and resume from previous state
-        memory = load_memory(memory_file)
-        if memory:
-            problem_statement = memory.get("problem_statement", problem_statement)
-            other_prompts = memory.get("other_prompts", other_prompts)
-            current_iteration = memory.get("current_iteration", 0)
-            solution = memory.get("solution", None)
-            verify = memory.get("verify", None)
-            print(f"Resuming from iteration {current_iteration}")
-        else:
-            print("Failed to load memory, starting fresh")
-            current_iteration = 0
-            solution = None
-            verify = None
+############################################################################################
+from utils import base_url
+from utils import deepseek_api_key_2 as key
+from utils import get_decomposition_prompts
+from utils import get_prompts_after_decomposition
+
+def build_messages(system_prompt, question_prompt, other_prompts=None):
+    """
+    创建 deepseek api 的 message
+    """
+    messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": question_prompt},
+        ]
+    return messages
+
+
+def ask_api(model, messages):
+
+    client = OpenAI(api_key=key, base_url=base_url)
+    response = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        stream=False,
+        # max_tokens=8192,
+    )
+    content = response.choices[0].message.content
+
+    if model == "deepseek-reasoner":
+        reasoning_content = response.choices[0].message.reasoning_content
+        return reasoning_content, content
+
+    # model == "deepseek-chat"
+    return content
+
+def extract_boxed_number(text: str):
+    # 提取最后一个 \boxed{...} 中的大括号内容
+    pattern = r"\\boxed\{([^}]*)\}"
+    matches = re.findall(pattern, text)
+    if matches:
+        return matches[-1]  # 取最后一个
     else:
-        # Start fresh
-        current_iteration = 0
-        solution = None
-        verify = None
-    
-    if solution is None:
-        p1, solution, verify, good_verify = init_explorations(problem_statement, True, other_prompts)
-        if(solution is None):
-            print(">>>>>>> Failed in finding a complete solution.")
-            return None
-    else:
-        # We have a solution from memory, need to get good_verify
-        _, good_verify = verify_solution(problem_statement, solution)
-
-    error_count = 0
-    correct_count = 1
-    success = False
-    for i in range(current_iteration, 30):
-        print(f"Number of iterations: {i}, number of corrects: {correct_count}, number of errors: {error_count}")
-
-        if("yes" not in good_verify.lower()):
-            # clear
-            correct_count = 0
-            error_count += 1
-
-            #self improvement
-            print(">>>>>>> Verification does not pass, correcting ...")
-            # establish a new prompt that contains the solution and the verification
-
-            p1 = build_request_payload(
-                system_prompt=step1_prompt,
-                question_prompt=problem_statement,
-                #other_prompts=["You may use analytic geometry to solve the problem."]
-                other_prompts=other_prompts
-            )
-
-            p1["contents"].append(
-                {"role": "model",
-                "parts": [{"text": solution}]
-                }
-            )
-            
-            p1["contents"].append(
-                {"role": "user",
-                "parts": [{"text": correction_prompt},
-                          {"text": verify}]
-                }
-            )
-
-            print(">>>>>>> New prompt:")
-            print(json.dumps(p1, indent=4))
-            response2 = send_api_request(get_api_key(), p1)
-            solution = extract_text_from_response(response2)
-
-            print(">>>>>>> Corrected solution:")
-            print(json.dumps(solution, indent=4))
-
-
-            #print(f">>>>>>> Check if solution is complete:"  )
-            #is_complete = check_if_solution_claimed_complete(solution)
-            #if not is_complete:
-            #    print(f">>>>>>> Solution is not complete. Failed.")
-            #    return None
-
-        print(f">>>>>>> Verify the solution.")
-        verify, good_verify = verify_solution(problem_statement, solution)
-
-        if("yes" in good_verify.lower()):
-            print(">>>>>>> Solution is good, verifying again ...")
-            correct_count += 1
-            error_count = 0
- 
-
-        # Save memory every iteration
-        if memory_file:
-            save_memory(memory_file, problem_statement, other_prompts, i, 30, solution, verify)
-        
-        if(correct_count >= 5):
-            print(">>>>>>> Correct solution found.")
-            print(json.dumps(solution, indent=4))
-            return solution
-
-        elif(error_count >= 10):
-            print(">>>>>>> Failed in finding a correct solution.")
-            # Save final state before returning
-            if memory_file:
-                save_memory(memory_file, problem_statement, other_prompts, i, 30, solution, verify)
-            return None
-
-    if(not success):
-        print(">>>>>>> Failed in finding a correct solution.")
-        # Save final state before returning
-        if memory_file:
-            save_memory(memory_file, problem_statement, other_prompts, 30, 30, solution, verify)
         return None
+
+def agent(problem_statement, ground_truth, other_prompts=[], memory_file=None, resume_from_memory=False):
+
+    current_iteration = 0
+    solution = None
+    verify = None
+    
+    verbose = True
+    
+    # model = "deepseek-chat"  # TODO
+    model = "deepseek-reasoner"
+    
+    system_prompt = "Please reason step by step, and put your final answer within \\boxed{}"
+    
+    messages  = build_messages(
+        system_prompt=system_prompt,
+        question_prompt=problem_statement,
+        )
+
+    output = {
+        problem_statement: problem_statement,
+    }
+    if model == "deepseek-chat":
+        content = ask_api(model, messages)
+        output["content"] = content
+    elif model == "deepseek-reasoner":
+        reasoning_content, content = ask_api(model, messages)
+        output["reasoning_content"] = reasoning_content
+        output["content"] = content
+    else:
+        print(f"Error: unknown model {model}")
+        return None
+    
+    if verbose:
+        print(f">>>>>>>> API results: ")
+        print(json.dumps(content, indent=4))
+
+    extracted_answer = extract_boxed_number(content)
+    acc = True if extracted_answer == ground_truth else False
+    print(f"extracted_answer: {extracted_answer}")
+    print(f"Ground truth: {ground_truth}")
+    print(f"Accuracy: {acc}")
+    
+    output["extracted_answer"] = extracted_answer
+    output["ground_truth"] = ground_truth
+    output["accuracy"] = acc
+
+    return output
+
+
+
+############################################################################################
         
 if __name__ == "__main__":
     # Set up argument parsing
-    parser = argparse.ArgumentParser(description='IMO Problem Solver Agent')
-    parser.add_argument('problem_file', nargs='?', default='problem_statement.txt', 
-                       help='Path to the problem statement file (default: problem_statement.txt)')
-    parser.add_argument('--log', '-l', type=str, help='Path to log file (optional)')
+    parser = argparse.ArgumentParser(description='Meta Agent System')
+    
+    # parser.add_argument('--test_data_dir', type=str, default="./data/AIME2025/test.json", help='Path to the problems')
+    parser.add_argument('--test_data_dir', type=str, default="./data/GSM8K/test.json", help='Path to the problems')
+
+    parser.add_argument('--log', '-l', type=bool, default=True, help='print to log file')
     parser.add_argument('--other_prompts', '-o', type=str, help='Other prompts (optional)')
-    parser.add_argument("--max_runs", '-m', type=int, default=10, help='Maximum number of runs (default: 10)')
+    parser.add_argument("--max_runs", '-m', type=int, default=1, help='Maximum number of runs (default: 10)')
     parser.add_argument('--memory', '-mem', type=str, help='Path to memory file for saving/loading state (optional)')
     parser.add_argument('--resume', '-r', action='store_true', help='Resume from memory file if provided')
-    
     args = parser.parse_args()
-
+    
+    # ------------- 不重要的参数 -------------
     max_runs = args.max_runs
     memory_file = args.memory
     resume_from_memory = args.resume
@@ -634,23 +622,35 @@ if __name__ == "__main__":
 
     # Set up logging if log file is specified
     if args.log:
-        if not set_log_file(args.log):
+        
+        timestamp = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+        log_filename = f"zz_log_{timestamp}.txt"  
+        
+        if not set_log_file(log_filename):
             sys.exit(1)
-        print(f"Logging to file: {args.log}")
+        print(f"Logging to file: {log_filename}")
+    # ------------- 读取数据 -------------
+    # problem_statement = read_file_content(args.problem_file)  # TODO:加载数据
     
-    problem_statement = read_file_content(args.problem_file)
-
-    for i in range(max_runs):
-        print(f"\n\n>>>>>>>>>>>>>>>>>>>>>>>>>> Run {i} of {max_runs} ...")
-        try:
-            sol = agent(problem_statement, other_prompts, memory_file, resume_from_memory)
-            if(sol is not None):
-                print(f">>>>>>> Found a correct solution in run {i}.")
-                print(json.dumps(sol, indent=4))
-                break
-        except Exception as e:
-            print(f">>>>>>> Error in run {i}: {e}")
-            continue
+    # 打开 test.json
     
-    # Close log file if it was opened
+    with open(args.test_data_dir, 'r', encoding='utf-8') as f:
+        problems = json.load(f)
+    print(f"Loaded {len(problems)} problems from {args.test_data_dir}")
+    
+    
+    for idx, item in enumerate(problems):
+        print("="*60)
+        print(">>>>>>> Process problem id:", item['id'])
+        print("="*60)
+        
+        print(json.dumps(item, indent=4))
+        print("-"*40)
+        
+        problem_statement = item['prompt']
+        ground_truth = item['answer']
+    
+        agent(problem_statement, ground_truth, other_prompts)
+                
+        # Close log file if it was opened
     close_log_file()
