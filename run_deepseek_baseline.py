@@ -593,8 +593,9 @@ if __name__ == "__main__":
     # Set up argument parsing
     parser = argparse.ArgumentParser(description='Meta Agent System')
     
-    # parser.add_argument('--test_data_dir', type=str, default="./data/AIME2025/test.json", help='Path to the problems')
-    parser.add_argument('--test_data_dir', type=str, default="./data/GSM8K/test.json", help='Path to the problems')
+    parser.add_argument('--test_data_dir', type=str, default="./data/AIME2025/test.json", help='Path to the problems')
+    # parser.add_argument('--test_data_dir', type=str, default="./data/AIME2024/test.json", help='Path to the problems')
+    # parser.add_argument('--test_data_dir', type=str, default="./data/GSM8K/test.json", help='Path to the problems')
 
     parser.add_argument('--log', '-l', type=bool, default=True, help='print to log file')
     parser.add_argument('--other_prompts', '-o', type=str, help='Other prompts (optional)')
@@ -638,8 +639,18 @@ if __name__ == "__main__":
         problems = json.load(f)
     print(f"Loaded {len(problems)} problems from {args.test_data_dir}")
     
+    wrong_sample_IDs = [
+        "II_14", 
+        "I_14", 
+        "I_15", 
+        "II_13",
+        ]
     
     for idx, item in enumerate(problems):
+        
+        if item['id'] not in wrong_sample_IDs:
+            continue
+        
         print("="*60)
         print(">>>>>>> Process problem id:", item['id'])
         print("="*60)

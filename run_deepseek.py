@@ -32,6 +32,7 @@ import argparse
 import logging
 from openai import OpenAI
 import time
+import re
 
 # --- CONFIGURATION ---
 # The model to use. "gemini-1.5-flash" is fast and capable.
@@ -87,164 +88,18 @@ def close_log_file():
         _log_file.close()
         _log_file = None
 
-def save_memory(memory_file, problem_statement, other_prompts, current_iteration, max_runs, solution=None, verify=None):
-    """
-    Save the current state to a memory file.
-    """
-    memory = {
-        "problem_statement": problem_statement,
-        "other_prompts": other_prompts,
-        "current_iteration": current_iteration,
-        "max_runs": max_runs,
-        "solution": solution,
-        "verify": verify,
-        "timestamp": __import__('datetime').datetime.now().isoformat()
-    }
-    
-    try:
-        with open(memory_file, 'w', encoding='utf-8') as f:
-            json.dump(memory, f, indent=2, ensure_ascii=False)
-        print(f"Memory saved to {memory_file}")
-        return True
-    except Exception as e:
-        print(f"Error saving memory to {memory_file}: {e}")
-        return False
+# def get_api_key():
+#     """
+#     Retrieves the Google API key from environment variables.
+#     Exits if the key is not found.
+#     """
 
-def load_memory(memory_file):
-    """
-    Load the state from a memory file.
-    """
-    try:
-        with open(memory_file, 'r', encoding='utf-8') as f:
-            memory = json.load(f)
-        print(f"Memory loaded from {memory_file}")
-        return memory
-    except Exception as e:
-        print(f"Error loading memory from {memory_file}: {e}")
-        return None
-
-step1_prompt = """
-### Core Instructions ###
-
-*   **Rigor is Paramount:** Your primary goal is to produce a complete and rigorously justified solution. Every step in your solution must be logically sound and clearly explained. A correct final answer derived from flawed or incomplete reasoning is considered a failure.
-*   **Honesty About Completeness:** If you cannot find a complete solution, you must **not** guess or create a solution that appears correct but contains hidden flaws or justification gaps. Instead, you should present only significant partial results that you can rigorously prove. A partial result is considered significant if it represents a substantial advancement toward a full solution. Examples include:
-    *   Proving a key lemma.
-    *   Fully resolving one or more cases within a logically sound case-based proof.
-    *   Establishing a critical property of the mathematical objects in the problem.
-    *   For an optimization problem, proving an upper or lower bound without proving that this bound is achievable.
-*   **Use TeX for All Mathematics:** All mathematical variables, expressions, and relations must be enclosed in TeX delimiters (e.g., `Let $n$ be an integer.`).
-
-### Output Format ###
-
-Your response MUST be structured into the following sections, in this exact order.
-
-**1. Summary**
-
-Provide a concise overview of your findings. This section must contain two parts:
-
-*   **a. Verdict:** State clearly whether you have found a complete solution or a partial solution.
-    *   **For a complete solution:** State the final answer, e.g., "I have successfully solved the problem. The final answer is..."
-    *   **For a partial solution:** State the main rigorous conclusion(s) you were able to prove, e.g., "I have not found a complete solution, but I have rigorously proven that..."
-*   **b. Method Sketch:** Present a high-level, conceptual outline of your solution. This sketch should allow an expert to understand the logical flow of your argument without reading the full detail. It should include:
-    *   A narrative of your overall strategy.
-    *   The full and precise mathematical statements of any key lemmas or major intermediate results.
-    *   If applicable, describe any key constructions or case splits that form the backbone of your argument.
-
-**2. Detailed Solution**
-
-Present the full, step-by-step mathematical proof. Each step must be logically justified and clearly explained. The level of detail should be sufficient for an expert to verify the correctness of your reasoning without needing to fill in any gaps. This section must contain ONLY the complete, rigorous proof, free of any internal commentary, alternative approaches, or failed attempts.
-
-### Self-Correction Instruction ###
-
-Before finalizing your output, carefully review your "Method Sketch" and "Detailed Solution" to ensure they are clean, rigorous, and strictly adhere to all instructions provided above. Verify that every statement contributes directly to the final, coherent mathematical argument.
-
-"""
-
-self_improvement_prompt = """
-You have an opportunity to improve your solution. Please review your solution carefully. Correct errors and fill justification gaps if any. Your second round of output should strictly follow the instructions in the system prompt.
-"""
-
-check_verification_prompt = """
-Can you carefully review each item in your list of findings? Are they valid or overly strict? An expert grader must be able to distinguish between a genuine flaw and a concise argument that is nonetheless sound, and to correct their own assessment when necessary.
-
-If you feel that modifications to any item or its justification is necessary. Please produce a new list. In your final output, please directly start with **Summary** (no need to justify the new list).
-"""
-
-correction_prompt = """
-Below is the bug report. If you agree with certain item in it, can you improve your solution so that it is complete and rigorous? Note that the evaluator who generates the bug report can misunderstand your solution and thus make mistakes. If you do not agree with certain item in the bug report, please add some detailed explanations to avoid such misunderstanding. Your new solution should strictly follow the instructions in the system prompt.
-"""
-
-verification_system_prompt = """
-You are an expert mathematician and a meticulous grader for an International Mathematical Olympiad (IMO) level exam. Your primary task is to rigorously verify the provided mathematical solution. A solution is to be judged correct **only if every step is rigorously justified.** A solution that arrives at a correct final answer through flawed reasoning, educated guesses, or with gaps in its arguments must be flagged as incorrect or incomplete.
-
-### Instructions ###
-
-**1. Core Instructions**
-*   Your sole task is to find and report all issues in the provided solution. You must act as a **verifier**, NOT a solver. **Do NOT attempt to correct the errors or fill the gaps you find.**
-*   You must perform a **step-by-step** check of the entire solution. This analysis will be presented in a **Detailed Verification Log**, where you justify your assessment of each step: for correct steps, a brief justification suffices; for steps with errors or gaps, you must provide a detailed explanation.
-
-**2. How to Handle Issues in the Solution**
-When you identify an issue in a step, you MUST first classify it into one of the following two categories and then follow the specified procedure.
-
-*   **a. Critical Error:**
-    This is any error that breaks the logical chain of the proof. This includes both **logical fallacies** (e.g., claiming that `A>B, C>D` implies `A-C>B-D`) and **factual errors** (e.g., a calculation error like `2+3=6`).
-    *   **Procedure:**
-        *   Explain the specific error and state that it **invalidates the current line of reasoning**.
-        *   Do NOT check any further steps that rely on this error.
-        *   You MUST, however, scan the rest of the solution to identify and verify any fully independent parts. For example, if a proof is split into multiple cases, an error in one case does not prevent you from checking the other cases.
-
-*   **b. Justification Gap:**
-    This is for steps where the conclusion may be correct, but the provided argument is incomplete, hand-wavy, or lacks sufficient rigor.
-    *   **Procedure:**
-        *   Explain the gap in the justification.
-        *   State that you will **assume the step's conclusion is true** for the sake of argument.
-        *   Then, proceed to verify all subsequent steps to check if the remainder of the argument is sound.
-
-**3. Output Format**
-Your response MUST be structured into two main sections: a **Summary** followed by the **Detailed Verification Log**.
-
-*   **a. Summary**
-    This section MUST be at the very beginning of your response. It must contain two components:
-    *   **Final Verdict**: A single, clear sentence declaring the overall validity of the solution. For example: "The solution is correct," "The solution contains a Critical Error and is therefore invalid," or "The solution's approach is viable but contains several Justification Gaps."
-    *   **List of Findings**: A bulleted list that summarizes **every** issue you discovered. For each finding, you must provide:
-        *   **Location:** A direct quote of the key phrase or equation where the issue occurs.
-        *   **Issue:** A brief description of the problem and its classification (**Critical Error** or **Justification Gap**).
-
-*   **b. Detailed Verification Log**
-    Following the summary, provide the full, step-by-step verification log as defined in the Core Instructions. When you refer to a specific part of the solution, **quote the relevant text** to make your reference clear before providing your detailed analysis of that part.
-
-**Example of the Required Summary Format**
-*This is a generic example to illustrate the required format. Your findings must be based on the actual solution provided below.*
-
-**Final Verdict:** The solution is **invalid** because it contains a Critical Error.
-
-**List of Findings:**
-*   **Location:** "By interchanging the limit and the integral, we get..."
-    *   **Issue:** Justification Gap - The solution interchanges a limit and an integral without providing justification, such as proving uniform convergence.
-*   **Location:** "From $A > B$ and $C > D$, it follows that $A-C > B-D$"
-    *   **Issue:** Critical Error - This step is a logical fallacy. Subtracting inequalities in this manner is not a valid mathematical operation.
-
-"""
-
-
-verification_remider = """
-### Verification Task Reminder ###
-
-Your task is to act as an IMO grader. Now, generate the **summary** and the **step-by-step verification log** for the solution above. In your log, justify each correct step and explain in detail any errors or justification gaps you find, as specified in the instructions above.
-"""
-
-def get_api_key():
-    """
-    Retrieves the Google API key from environment variables.
-    Exits if the key is not found.
-    """
-
-    api_key = os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        print("Error: GOOGLE_API_KEY environment variable not set.")
-        print("Please set the variable, e.g., 'export GOOGLE_API_KEY=\"your_api_key\"'")
-        sys.exit(1)
-    return api_key
+#     api_key = os.getenv("GOOGLE_API_KEY")
+#     if not api_key:
+#         print("Error: GOOGLE_API_KEY environment variable not set.")
+#         print("Please set the variable, e.g., 'export GOOGLE_API_KEY=\"your_api_key\"'")
+#         sys.exit(1)
+#     return api_key
 
 def read_file_content(filepath):
     """
@@ -495,8 +350,6 @@ def init_explorations(problem_statement, verbose=True, other_prompts=[]):
 ############################################################################################
 from utils import base_url
 from utils import deepseek_api_key_2 as key
-from utils import get_decomposition_prompts
-from utils import get_prompts_after_decomposition
 
 def build_messages(system_prompt, question_prompt, other_prompts=None):
     """
@@ -530,6 +383,8 @@ def ask_api(model, messages):
 
 # step 1
 def task_decomposition(model, problem_statement, other_prompts, verbose=True):
+    
+    from utils import get_decomposition_prompts
     #################
     step1_system_prompt, step1_user_prompt = get_decomposition_prompts(problem_statement)
     messages  = build_messages(
@@ -570,6 +425,8 @@ def task_decomposition(model, problem_statement, other_prompts, verbose=True):
 
 # step 2
 def reasoning_after_decomposition(model, problem_statement, step1_output, other_prompts, verbose=True):
+    
+    from utils import get_prompts_after_decomposition
     #################
     step2_system_prompt, step2_user_prompt = get_prompts_after_decomposition(problem_statement, step1_output)
     messages  = build_messages(
@@ -603,18 +460,115 @@ def reasoning_after_decomposition(model, problem_statement, step1_output, other_
         return None
 
     if verbose:
-        print(f">>>>>>>> Decomposition results: ")
+        print(f">>>>>>>> reasoning results: ")
         print(json.dumps(output, indent=4))
     
     return output, messages
 
+
+def extract_boxed_number(text: str):
+    # 提取最后一个 \boxed{...} 中的大括号内容
+    pattern = r"\\boxed\{([^}]*)\}"
+    matches = re.findall(pattern, text)
+    if matches:
+        return matches[-1]  # 取最后一个
+    else:
+        return None
+
+
+def verify(content, ground_truth):
+    extracted_answer = extract_boxed_number(content)
+    acc = True if extracted_answer == ground_truth else False
+    return acc
+
+
+def monitoring(model, problem_statement, last_solution, verbose=True):
+    
+    from utils import get_monitoring_prompts
+    #################
+    step3_system_prompt, step3_user_prompt = get_monitoring_prompts(problem_statement, last_solution)
+    messages  = build_messages(
+            system_prompt=step3_system_prompt,
+            question_prompt=step3_user_prompt,
+            other_prompts = other_prompts
+        )
+
+    print("="*20 + " Step 3, monitoring begins")
+    if verbose:
+        print(f">>>>>> Monitoring prompt:")
+        for p in messages:
+            print(json.dumps(p, indent=4))
+    
+    #################
+    print(f">>>>>> asking api ...")
+    print("="*20)
+    
+    output = {}
+    if model == "deepseek-chat":
+        content = ask_api(model, messages)
+        output["content"] = content
+
+    elif model == "deepseek-reasoner":
+        reasoning_content, content = ask_api(model, messages)
+        output["reasoning_content"] = reasoning_content
+        output["content"] = content
+
+    else:
+        print(f"Error: unknown model {model}")
+        return None
+
+    if verbose:
+        print(f">>>>>>>> Monitoring results: ")
+        print(json.dumps(output, indent=4))
+    
+    return output, messages
+
+
+def controling(model, problem_statement, last_solution, monitor_output, verbose=True):
+    from utils import get_controling_prompts
+    #################
+    step4_system_prompt, step4_user_prompt = get_controling_prompts(problem_statement, last_solution, monitor_output)
+    messages  = build_messages(
+            system_prompt=step4_system_prompt,
+            question_prompt=step4_user_prompt,
+            other_prompts = other_prompts
+        )
+
+    print("="*20 + " Step 4, controlling begins")
+    if verbose:
+        print(f">>>>>> Controlling prompt:")
+        for p in messages:
+            print(json.dumps(p, indent=4))
+    
+    #################
+    print(f">>>>>> asking api ...")
+    print("="*20)
+    
+    output = {}
+    if model == "deepseek-chat":
+        content = ask_api(model, messages)
+        output["content"] = content
+
+    elif model == "deepseek-reasoner":
+        reasoning_content, content = ask_api(model, messages)
+        output["reasoning_content"] = reasoning_content
+        output["content"] = content
+
+    else:
+        print(f"Error: unknown model {model}")
+        return None
+
+    if verbose:
+        print(f">>>>>>>> Controlling results: ")
+        print(json.dumps(output, indent=4))
+
+    return output, messages
 
 
 def agent(problem_statement, ground_truth, other_prompts=[], memory_file=None, resume_from_memory=False):
 
     current_iteration = 0
     solution = None
-    verify = None
     
     verbose = True
     
@@ -625,7 +579,55 @@ def agent(problem_statement, ground_truth, other_prompts=[], memory_file=None, r
 
     step2_output, step2_sent_messages = reasoning_after_decomposition(model, problem_statement, step1_output["content"], other_prompts, verbose=verbose)
     
-    return None
+    
+    error_count = 0
+    correct_count = 0
+    max_iterations = 10
+    
+    last_solution = step2_output["content"]
+    
+    acc_history = []
+    
+    for i in range(max_iterations):
+        print(f">>>>>>> Iterations: {i}, correct_count: {correct_count}, error_count: {error_count}, acc_history: {acc_history}")
+
+        acc = verify(last_solution, ground_truth)
+        acc_history.append(acc)
+        
+        print(f">>>>>>> Current accuracy: {acc}, ground_truth: {ground_truth}")
+        
+        if acc:
+            correct_count += 1
+            error_count = 0
+        else:
+            correct_count = 0
+            error_count += 1
+        
+        # if(correct_count >= 5):  # 判断的逻辑简化一下，只要对一次，就判为pass
+        if(correct_count):  # 判断的逻辑简化一下，只要对一次，就判为pass
+            print(">>>>>>> Correct solution found.")
+            print(json.dumps(last_solution, indent=4))
+            return True, acc_history, last_solution
+        elif(error_count >= 10):
+            print(">>>>>>> Failed in finding a correct solution.")
+            return False, acc_history, last_solution
+
+        # step 3: monitoring
+        monitor_output, step3_sent_messages = monitoring(model, problem_statement, last_solution, verbose=verbose)
+        
+        # step 4: control
+        control_output, step4_sent_messages = controling(model, problem_statement, last_solution, monitor_output["content"], verbose=verbose)
+        
+        output = control_output["content"]
+        
+        if "Full Corrected Solution" in output:
+            idx = output.find("Full Corrected Solution")
+            last_solution = output[idx + len("Full Corrected Solution"):].strip()
+        else:
+            last_solution = output
+        
+    
+    return False, acc_history, last_solution
 
 
 
@@ -634,7 +636,11 @@ def agent(problem_statement, ground_truth, other_prompts=[], memory_file=None, r
 if __name__ == "__main__":
     # Set up argument parsing
     parser = argparse.ArgumentParser(description='Meta Agent System')
-    parser.add_argument('--test_data_dir', type=str, default="./data/AIME2025/test.json", help='Path to the problems')
+    # parser.add_argument('--test_data_dir', type=str, default="./data/AIME2025/test.json", help='Path to the problems')
+    parser.add_argument('--test_data_dir', type=str, default="./data/AIME2024/test.json", help='Path to the problems')
+
+    # parser.add_argument('--test_data_dir', type=str, default="./data/GSM8K/test.json", help='Path to the problems')
+
     parser.add_argument('--log', '-l', type=bool, default=True, help='print to log file')
     parser.add_argument('--other_prompts', '-o', type=str, help='Other prompts (optional)')
     parser.add_argument("--max_runs", '-m', type=int, default=1, help='Maximum number of runs (default: 10)')
@@ -668,17 +674,30 @@ if __name__ == "__main__":
         if not set_log_file(log_filename):
             sys.exit(1)
         print(f"Logging to file: {log_filename}")
+        
     # ------------- 读取数据 -------------
-    # problem_statement = read_file_content(args.problem_file)  # TODO:加载数据
-    
     # 打开 test.json
-    
     with open(args.test_data_dir, 'r', encoding='utf-8') as f:
         problems = json.load(f)
     print(f"Loaded {len(problems)} problems from {args.test_data_dir}")
     
+    # # AIME2025 错误样本
+    # wrong_sample_IDs = [
+    #     # "II_14", 
+    #     "I_14", 
+    #     "I_15", 
+    #     "II_13",
+    #     ]
+    
+    # AIME2024 错误样本
+    # wrong_sample_IDs = ["11"]
+    wrong_sample_IDs = ["29"]
     
     for idx, item in enumerate(problems):
+        
+        if item['id'] not in wrong_sample_IDs:
+            continue
+        
         print("="*60)
         print(">>>>>>> Process problem id:", item['id'])
         print("="*60)
@@ -692,11 +711,9 @@ if __name__ == "__main__":
         for i in range(max_runs):
             print(f"\n\n>>>>>>>>>>>>>>>>>>>>>>>>>> Run {i+1}/{max_runs} ...")
             try:
-                sol = agent(problem_statement, ground_truth, other_prompts)
-                if(sol is not None):
-                    print(f">>>>>>> Found a correct solution in run {i}.")
-                    print(json.dumps(sol, indent=4))
-                    break
+                final_acc, acc_history, last_solution = agent(problem_statement, ground_truth, other_prompts)
+                print(f">>>>>>> Final accuracy: {final_acc}")
+                print(f">>>>>>> Accuracy history: {acc_history}")
             except Exception as e:
                 print(f">>>>>>> Error in run {i}: {e}")
                 continue
