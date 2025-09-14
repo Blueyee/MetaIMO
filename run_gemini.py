@@ -708,7 +708,7 @@ if __name__ == "__main__":
             "11",
             ]
     else:
-        wrong_sample_IDs = []  # GSM8K 全部跑
+        wrong_sample_IDs = []
     
     print(f"Loaded {len(wrong_sample_IDs)} wrong samples from {args.test_data_dir}")
     print(wrong_sample_IDs)

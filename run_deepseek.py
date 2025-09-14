@@ -643,7 +643,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--log', '-l', type=bool, default=True, help='print to log file')
     parser.add_argument('--other_prompts', '-o', type=str, help='Other prompts (optional)')
-    parser.add_argument("--max_runs", '-m', type=int, default=1, help='Maximum number of runs (default: 10)')
+    parser.add_argument("--max_runs", '-m', type=int, default=5, help='Maximum number of runs (default: 10)')
     parser.add_argument('--memory', '-mem', type=str, help='Path to memory file for saving/loading state (optional)')
     parser.add_argument('--resume', '-r', action='store_true', help='Resume from memory file if provided')
     args = parser.parse_args()
@@ -654,7 +654,7 @@ if __name__ == "__main__":
     resume_from_memory = args.resume
     
     other_prompts = []
-    if args.other_prompts:
+    if args.other_prompts:  
         other_prompts = args.other_prompts.split(',')
 
     print(">>>>>>> Other prompts:")
@@ -681,17 +681,23 @@ if __name__ == "__main__":
         problems = json.load(f)
     print(f"Loaded {len(problems)} problems from {args.test_data_dir}")
     
-    # # AIME2025 错误样本
-    # wrong_sample_IDs = [
-    #     # "II_14", 
-    #     "I_14", 
-    #     "I_15", 
-    #     "II_13",
-    #     ]
+    if args.test_data_dir.endswith("AIME2025/test.json"):
+        # AIME2025 错误样本
+        wrong_sample_IDs = [
+            # "II_14", pass
+            "I_14", 
+            "I_15", 
+            "II_13",
+            ]
+    elif args.test_data_dir.endswith("AIME2024/test.json"):
     
-    # AIME2024 错误样本
-    # wrong_sample_IDs = ["11"]
-    wrong_sample_IDs = ["29"]
+        # AIME2024 错误样本
+        wrong_sample_IDs = [
+            # "11",  # pass
+            "29",
+            ]
+    else:
+        wrong_sample_IDs = []
     
     for idx, item in enumerate(problems):
         
@@ -720,3 +726,12 @@ if __name__ == "__main__":
                 
         # Close log file if it was opened
     close_log_file()
+
+
+"""
+指令:
+
+python run_deepseek.py --test_data_dir ./data/AIME2025/test.json  --max_runs 5
+python run_deepseek.py --test_data_dir ./data/AIME2024/test.json  --max_runs 5
+
+"""
