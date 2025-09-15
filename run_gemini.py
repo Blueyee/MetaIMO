@@ -177,7 +177,8 @@ def build_request_payload(system_prompt, question_prompt, other_prompts=None):
       "generationConfig": {
         "temperature": 0.1,
         "topP": 1.0,
-        "thinkingConfig": { "thinkingBudget": 32768} 
+        "maxOutputTokens": 32700,
+        "thinkingConfig": { "thinkingBudget": 32700} 
       },
     }
 
@@ -640,11 +641,8 @@ def agent(problem_statement, ground_truth, other_prompts=[], memory_file=None, r
             last_solution = output[idx + len("Full Corrected Solution"):].strip()
         else:
             last_solution = output
-        
     
     return False, acc_history, last_solution
-
-
 
 ############################################################################################
         
@@ -697,7 +695,7 @@ if __name__ == "__main__":
     if args.test_data_dir.endswith("AIME2025/test.json"):
         # AIME2025 错误样本
         wrong_sample_IDs = [
-            "I_13", 
+            # "I_13", # pass
             "I_14", 
             "I_15",
             ]
@@ -736,13 +734,17 @@ if __name__ == "__main__":
             print(f">>>>>>> Final accuracy: {final_acc}")
             print(f">>>>>>> Accuracy history: {acc_history}")
 
+            if final_acc:
+                print(">>>>>>>>>> Current samplePass!")
+                break
+
     close_log_file()
 
 
 """
 指令
 
-python run_gemini.py --test_data_dir ./data/AIME2025/test.json  --max_runs 5
 python run_gemini.py --test_data_dir ./data/AIME2024/test.json  --max_runs 5
+python run_gemini.py --test_data_dir ./data/AIME2025/test.json  --max_runs 5
 
 """
